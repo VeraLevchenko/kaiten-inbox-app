@@ -106,9 +106,7 @@ function App() {
     if (!state?.current_card) return;
     
     console.log('[DEBUG] handleAssign called with userIds:', userIds);
-    console.log('[DEBUG] userIds type:', typeof userIds);
-    console.log('[DEBUG] userIds is array:', Array.isArray(userIds));
-    console.log('[DEBUG] userIds[0]:', userIds[0]);
+    console.log('[DEBUG] commentText:', commentText);
     
     try {
       setLoading(true);
@@ -117,13 +115,11 @@ function App() {
         card_id: state.current_card.card_id,
         owner_id: userIds[0],
         co_owner_ids: userIds.slice(1),
-        comment_text: commentText,
+        comment_text: commentText, // Комментарий добавляется при любом назначении
         multi: userIds.length > 1,
       };
       
       console.log('[DEBUG] Sending data to backend:', data);
-      console.log('[DEBUG] owner_id:', data.owner_id);
-      console.log('[DEBUG] owner_id type:', typeof data.owner_id);
       
       const newState = await assignCard(data);
       setState(newState);
@@ -131,11 +127,11 @@ function App() {
       // Сброс состояния
       setMultiMode(false);
       setSelectedEmployees([]);
-      setCommentText('');
+      setCommentText(''); // Очищаем комментарий после назначения
       setShowCommentModal(false);
       setError(null);
       
-      console.log('[DEBUG] Assignment successful!');
+      console.log('[DEBUG] Assignment successful! Comment was:', commentText ? `"${commentText}"` : 'empty');
     } catch (err) {
       console.error('[ERROR] Failed to assign:', err);
       setError('Не удалось назначить исполнителя');
@@ -271,13 +267,28 @@ function App() {
             >
               Пропустить
             </button>
+            
+            {/* ЭТАП 6: Кнопка комментария с индикатором */}
             <button 
-              className="btn btn-secondary"
+              className={`btn btn-secondary ${commentText ? 'has-comment' : ''}`}
               onClick={() => setShowCommentModal(true)}
               disabled={!state?.current_card || loading}
             >
-              Комментарий
+              Комментарий {commentText && '✓'}
             </button>
+            
+            {/* ЭТАП 6: Кнопка очистки комментария */}
+            {commentText && (
+              <button
+                className="btn btn-sm btn-outline"
+                onClick={() => setCommentText('')}
+                disabled={loading}
+                title="Очистить комментарий"
+              >
+                ✕
+              </button>
+            )}
+            
             <button 
               className={`btn btn-secondary ${multiMode ? 'active' : ''}`}
               onClick={() => {
@@ -352,11 +363,14 @@ function App() {
         </aside>
       </div>
 
-      {/* Модальное окно комментария */}
+      {/* ЭТАП 6: Модальное окно комментария - улучшенная версия */}
       {showCommentModal && (
         <div className="modal-overlay" onClick={() => setShowCommentModal(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>Резолюция</h3>
+            <p className="modal-hint">
+              Комментарий будет добавлен к карточке при назначении исполнителя
+            </p>
             <textarea
               value={commentText}
               onChange={(e) => setCommentText(e.target.value)}
@@ -367,13 +381,20 @@ function App() {
             <div className="modal-buttons">
               <button 
                 className="btn btn-secondary"
-                onClick={() => setShowCommentModal(false)}
+                onClick={() => {
+                  setShowCommentModal(false);
+                  // Не очищаем commentText - пользователь может передумать
+                }}
               >
                 Отмена
               </button>
               <button 
                 className="btn btn-primary"
-                onClick={() => setShowCommentModal(false)}
+                onClick={() => {
+                  setShowCommentModal(false);
+                  // commentText уже сохранён через onChange
+                  console.log('[COMMENT] Saved:', commentText);
+                }}
               >
                 Сохранить
               </button>

@@ -306,3 +306,88 @@
   gap: 12px;
   justify-content: flex-end;
 }
+
+/* Дополнительные стили для ЭТАПА 6 - Комментарии */
+
+/* Кнопка с комментарием - визуальный индикатор */
+.btn.has-comment {
+  background: #10b981;
+  color: white;
+  font-weight: 600;
+}
+
+.btn.has-comment:hover {
+  background: #059669;
+}
+
+/* Маленькая кнопка для очистки */
+.btn-sm {
+  padding: 8px 12px;
+  font-size: 14px;
+  min-width: auto;
+}
+
+.btn-outline {
+  background: transparent;
+  border: 2px solid #dc2626;
+  color: #dc2626;
+}
+
+.btn-outline:hover {
+  background: #dc2626;
+  color: white;
+}
+
+/* Подсказка в модальном окне */
+.modal-hint {
+  color: #6c757d;
+  font-size: 14px;
+  margin: 0 0 12px 0;
+  font-style: italic;
+}
+
+/* Улучшенные стили модального окна */
+.modal h3 {
+  margin: 0 0 8px 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: #212529;
+}
+
+.modal textarea {
+  width: 100%;
+  padding: 12px;
+  border: 2px solid #dee2e6;
+  border-radius: 6px;
+  font-size: 15px;
+  font-family: inherit;
+  resize: vertical;
+  margin-bottom: 16px;
+  transition: border-color 0.2s;
+}
+
+.modal textarea:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+/* Анимация появления индикатора */
+.btn.has-comment {
+  animation: pulse-green 0.5s ease-in-out;
+}
+
+@keyframes pulse-green {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}

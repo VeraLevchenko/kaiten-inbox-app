@@ -4,6 +4,8 @@ FastAPI приложение для распределения входящих 
 ЭТАП 5 (финальная версия) + Авторизация
 """
 
+from datetime import datetime
+from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, FileResponse
@@ -13,6 +15,7 @@ from typing import Optional, List
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+
 
 # Импортируем модули
 from kaiten_client import get_kaiten_client
@@ -52,6 +55,15 @@ FILES_ROOT = Path(os.getenv("FILES_ROOT", "../samples"))
 
 # Счётчик назначенных карточек за сессию
 assigned_session_count = 0
+
+# ЭТАП 8: Хранение последнего действия для Undo
+last_action: Optional[Dict[str, Any]] = None
+# Структура: {
+#   "card_id": int,
+#   "prev_column_id": int,
+#   "prev_members": List[Dict],  # Все предыдущие members с их ролями
+#   "timestamp": datetime
+# }
 
 # ============================================================================
 # Модели данных
@@ -221,7 +233,8 @@ async def root():
         },
         "kaiten_connected": True,
         "files_root": str(FILES_ROOT),
-        "assigned_this_session": assigned_session_count
+        "assigned_this_session": assigned_session_count,
+        "undo_available": last_action is not None  # Показываем, доступна ли отмена
     }
 
 @app.post("/api/login")
@@ -323,7 +336,7 @@ async def assign_card(request: AssignRequest, username: str = Depends(get_curren
     Returns:
         AppState: Обновленное состояние
     """
-    global assigned_session_count
+    global assigned_session_count, last_action
     
     client = get_kaiten_client()
     
@@ -335,6 +348,26 @@ async def assign_card(request: AssignRequest, username: str = Depends(get_curren
         print(f"[INFO] Co-owners (type: 1): {request.co_owner_ids}")
         print("="*60)
         
+        # ========== ЭТАП 8: Сохраняем текущее состояние для Undo ==========
+        print(f"\n[UNDO] Saving current state for undo...")
+        current_card = client.get_card(request.card_id)
+        if current_card:
+            prev_members = current_card.get('members', [])
+            prev_column_id = current_card.get('column_id')
+            
+            last_action = {
+                "card_id": request.card_id,
+                "prev_column_id": prev_column_id,
+                "prev_members": prev_members.copy(),  # Сохраняем копию всех members
+                "timestamp": datetime.now()
+            }
+            print(f"[UNDO] Saved: column={prev_column_id}, members={len(prev_members)}")
+        else:
+            print(f"[UNDO] WARNING: Could not get card info")
+            last_action = None
+        # ================================================================
+
+
         # Шаг 1: Удалить всех текущих members
         print(f"\n[STEP 1] Removing all existing members...")
         success = client.remove_all_members(request.card_id)
@@ -454,13 +487,90 @@ async def skip_card(request: SkipRequest, username: str = Depends(get_current_us
 async def undo_last_action(username: str = Depends(get_current_user)):
     """
     Отменить последнее действие
-    TODO: ЭТАП 6
+    ЭТАП 8: Восстановление карточки в очередь
+    
+    Логика:
+    1. Переместить карточку обратно в колонку "Очередь" (5592671)
+    2. Восстановить всех предыдущих members с их ролями
+    3. Уменьшить session_assigned_counter
+    4. Очистить last_action
+    5. Вернуть обновлённое состояние (карточка станет current_card)
     
     Returns:
         AppState: Обновленное состояние
     """
-    print(f"[TODO ЭТАП 6] Undo last action")
-    return build_app_state()
+    global assigned_session_count, last_action
+    
+    # Проверяем наличие last_action
+    if not last_action:
+        print("[UNDO] No action to undo")
+        raise HTTPException(status_code=400, detail="No action to undo")
+    
+    client = get_kaiten_client()
+    
+    try:
+        print("="*60)
+        print(f"[UNDO] ===== STARTING UNDO =====")
+        print(f"[UNDO] Card ID: {last_action['card_id']}")
+        print(f"[UNDO] Restoring to column: {last_action['prev_column_id']}")
+        print(f"[UNDO] Restoring {len(last_action['prev_members'])} members")
+        print("="*60)
+        
+        card_id = last_action['card_id']
+        
+        # Шаг 1: Удалить всех текущих members
+        print(f"\n[UNDO STEP 1] Removing current members...")
+        success = client.remove_all_members(card_id)
+        print(f"[UNDO STEP 1] Result: {'SUCCESS' if success else 'FAILED'}")
+        
+        # Шаг 2: Восстановить предыдущих members
+        print(f"\n[UNDO STEP 2] Restoring previous members...")
+        for member in last_action['prev_members']:
+            user_id = member.get('user_id')
+            member_type = member.get('type', 1)  # По умолчанию участник
+            full_name = member.get('full_name', f'User {user_id}')
+            
+            print(f"  Restoring {full_name} (ID: {user_id}, Type: {member_type})...")
+            
+            # Добавляем member
+            success = client.add_card_member(card_id, user_id)
+            if success and member_type != 1:
+                # Если роль не "участник" (type=1), обновляем роль
+                client.update_member_role(card_id, user_id, member_type)
+        
+        # Шаг 3: Переместить карточку обратно в очередь
+        print(f"\n[UNDO STEP 3] Moving card back to queue...")
+        success = client.move_card(card_id, last_action['prev_column_id'])
+        print(f"[UNDO STEP 3] Result: {'SUCCESS' if success else 'FAILED'}")
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to move card back to queue")
+        
+        # Шаг 4: Уменьшить счётчик назначенных
+        if assigned_session_count > 0:
+            assigned_session_count -= 1
+            print(f"[UNDO] Decreased assigned_session_count to {assigned_session_count}")
+        
+        # Шаг 5: Очистить last_action
+        last_action = None
+        print(f"[UNDO] Cleared last_action")
+        
+        print(f"\n[SUCCESS] ===== UNDO COMPLETE =====")
+        print("="*60)
+        
+        # Возвращаем обновлённое состояние
+        # Карточка должна снова появиться в очереди и стать current_card
+        return build_app_state()
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"\n[ERROR] ===== UNDO FAILED =====")
+        print(f"[ERROR] {e}")
+        import traceback
+        traceback.print_exc()
+        print("="*60)
+        raise HTTPException(status_code=500, detail=f"Failed to undo: {str(e)}")
 
 @app.get("/files/{incoming_no}/{filename}")
 async def get_file(
