@@ -25,10 +25,10 @@ function App() {
   useEffect(() => {
     loadState();
     
-    // Автообновление раз в час
+    // Автообновление каждые 5 секунд
     const interval = setInterval(() => {
       loadState();
-    }, 60 * 60 * 1000); // 1 час
+    }, 5000);
     
     return () => clearInterval(interval);
   }, []);
@@ -52,6 +52,11 @@ function App() {
   const handleAssign = async (userIds) => {
     if (!state?.current_card) return;
     
+    console.log('[DEBUG] handleAssign called with userIds:', userIds);
+    console.log('[DEBUG] userIds type:', typeof userIds);
+    console.log('[DEBUG] userIds is array:', Array.isArray(userIds));
+    console.log('[DEBUG] userIds[0]:', userIds[0]);
+    
     try {
       setLoading(true);
       
@@ -63,6 +68,10 @@ function App() {
         multi: userIds.length > 1,
       };
       
+      console.log('[DEBUG] Sending data to backend:', data);
+      console.log('[DEBUG] owner_id:', data.owner_id);
+      console.log('[DEBUG] owner_id type:', typeof data.owner_id);
+      
       const newState = await assignCard(data);
       setState(newState);
       
@@ -72,8 +81,10 @@ function App() {
       setCommentText('');
       setShowCommentModal(false);
       setError(null);
+      
+      console.log('[DEBUG] Assignment successful!');
     } catch (err) {
-      console.error('Failed to assign:', err);
+      console.error('[ERROR] Failed to assign:', err);
       setError('Не удалось назначить исполнителя');
     } finally {
       setLoading(false);
@@ -114,6 +125,8 @@ function App() {
 
   // Обработка выбора исполнителя
   const handleEmployeeSelect = (userIds) => {
+    console.log('[DEBUG] handleEmployeeSelect called with:', userIds);
+    
     if (multiMode) {
       setSelectedEmployees(userIds);
     } else {
@@ -124,6 +137,8 @@ function App() {
 
   // Подтверждение назначения в мульти-режиме
   const handleConfirmMulti = () => {
+    console.log('[DEBUG] handleConfirmMulti called, selectedEmployees:', selectedEmployees);
+    
     if (selectedEmployees.length > 0) {
       handleAssign(selectedEmployees);
     }

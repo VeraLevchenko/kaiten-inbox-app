@@ -27,12 +27,12 @@ const AssigneeButtons = ({ employees, onSelect, selectedIds = [], multiMode = fa
       </div>
       <div className="assignee-buttons-list">
         {employees.map((emp) => {
-          const isSelected = selectedIds.includes(emp.user_id);
+          const isSelected = selectedIds.includes(emp.id); // ИСПРАВЛЕНО: user_id → id
           return (
             <button
-              key={emp.user_id}
+              key={emp.id} // ИСПРАВЛЕНО: user_id → id
               className={`assignee-btn ${isSelected ? 'selected' : ''}`}
-              onClick={() => handleClick(emp.user_id)}
+              onClick={() => handleClick(emp.id)} // ИСПРАВЛЕНО: user_id → id
             >
               <span className="assignee-avatar">
                 {emp.name.charAt(0)}

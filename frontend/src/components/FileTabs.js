@@ -1,15 +1,23 @@
 import React, { useState, useEffect } from 'react';
+import { getFileUrl } from '../services/api';
 import './FileTabs.css';
 
-/**
- * Компонент вкладок для просмотра файлов письма
- * Сохраняет выбранную вкладку при обновлении если card_id не изменился
- */
 const FileTabs = ({ files, incomingNo, cardId }) => {
   const [activeTab, setActiveTab] = useState(0);
   const [prevCardId, setPrevCardId] = useState(null);
+  const [publicUrl, setPublicUrl] = useState('http://localhost:8000');
 
-  // Сброс вкладки только если изменился card_id
+  // Получаем публичный URL от backend
+  useEffect(() => {
+    fetch('http://localhost:8000/api/public-url')
+      .then(r => r.json())
+      .then(data => {
+        console.log('[DEBUG] Got public URL:', data.public_url);
+        setPublicUrl(data.public_url);
+      })
+      .catch(err => console.error('[ERROR] Failed to get public URL:', err));
+  }, []);
+
   useEffect(() => {
     if (cardId !== prevCardId) {
       setActiveTab(0);
@@ -27,53 +35,70 @@ const FileTabs = ({ files, incomingNo, cardId }) => {
 
   const activeFile = files[activeTab];
 
-  // Рендер содержимого в зависимости от типа файла
   const renderFileContent = (file) => {
     const ext = file.ext.toLowerCase();
+    const localUrl = getFileUrl(incomingNo, file.name);
 
-    // PDF - встроенный viewer
+    // Изображения - показываем как <img>
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) {
+      return (
+        <div className="file-image-wrapper">
+          <img 
+            src={localUrl} 
+            alt={file.name}
+            className="file-viewer-image"
+          />
+        </div>
+      );
+    }
+
+    // PDF - показываем во встроенном iframe
     if (ext === 'pdf') {
       return (
         <iframe
-          src={file.url}
+          src={localUrl}
           title={file.name}
           className="file-viewer-iframe"
         />
       );
     }
 
-    // HTML - встроенный viewer
-    if (ext === 'html' || ext === 'htm') {
+    // DOCX - показываем через Google Docs Viewer
+    if (['docx', 'doc'].includes(ext)) {
+      // Используем публичный URL для Google Docs Viewer
+      const filePublicUrl = `${publicUrl}/files/${incomingNo}/${encodeURIComponent(file.name)}`;
+      const viewerUrl = `https://docs.google.com/viewer?url=${encodeURIComponent(filePublicUrl)}&embedded=true`;
+      
+      console.log('[DEBUG] DOCX viewer URL:', viewerUrl);
+      
       return (
         <iframe
-          src={file.url}
+          src={viewerUrl}
           title={file.name}
           className="file-viewer-iframe"
         />
       );
     }
 
-    // Текстовые файлы - встроенный viewer через iframe
-    if (ext === 'txt') {
+    // HTML и TXT - показываем во встроенном iframe
+    if (ext === 'html' || ext === 'htm' || ext === 'txt') {
       return (
         <iframe
-          src={file.url}
+          src={localUrl}
           title={file.name}
           className="file-viewer-iframe"
         />
       );
     }
 
-    // DOCX, XLSX и прочие - ссылка на скачивание
+    // Для остальных файлов (XLSX и т.д.) - показываем кнопку скачивания
     return (
       <div className="file-download-wrapper">
         <div className="file-info">
           <div className="file-icon">
-            {ext === 'docx' && '📄'}
-            {ext === 'xlsx' && '📊'}
-            {ext === 'doc' && '📄'}
-            {ext === 'xls' && '📊'}
-            {!['docx', 'xlsx', 'doc', 'xls'].includes(ext) && '📎'}
+            {(ext === 'xlsx' || ext === 'xls') && '📊'}
+            {(ext === 'pptx' || ext === 'ppt') && '📊'}
+            {!['xlsx', 'xls', 'pptx', 'ppt'].includes(ext) && '📎'}
           </div>
           <div className="file-details">
             <div className="file-name">{file.name}</div>
@@ -81,21 +106,32 @@ const FileTabs = ({ files, incomingNo, cardId }) => {
           </div>
         </div>
         <a
-          href={file.url}
+          href={localUrl}
           download={file.name}
           target="_blank"
           rel="noopener noreferrer"
           className="file-download-btn"
         >
-          Скачать / Открыть
+          Скачать файл
         </a>
       </div>
     );
   };
 
+  const getFileIcon = (ext) => {
+    const lower = ext.toLowerCase();
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(lower)) return '🖼️';
+    if (lower === 'pdf') return '📕';
+    if (lower === 'txt') return '📄';
+    if (lower === 'html' || lower === 'htm') return '🌐';
+    if (lower === 'docx' || lower === 'doc') return '📘';
+    if (lower === 'xlsx' || lower === 'xls') return '📊';
+    if (lower === 'pptx' || lower === 'ppt') return '📊';
+    return '📎';
+  };
+
   return (
     <div className="file-tabs">
-      {/* Вкладки */}
       <div className="tabs-header">
         {files.map((file, index) => (
           <button
@@ -104,19 +140,12 @@ const FileTabs = ({ files, incomingNo, cardId }) => {
             onClick={() => setActiveTab(index)}
           >
             <span className="tab-icon">
-              {file.ext === 'pdf' && '📕'}
-              {file.ext === 'txt' && '📄'}
-              {file.ext === 'html' && '🌐'}
-              {file.ext === 'docx' && '📘'}
-              {file.ext === 'xlsx' && '📊'}
-              {!['pdf', 'txt', 'html', 'docx', 'xlsx'].includes(file.ext) && '📎'}
+              {getFileIcon(file.ext)}
             </span>
             <span className="tab-name">{file.name}</span>
           </button>
         ))}
       </div>
-
-      {/* Содержимое файла */}
       <div className="tabs-content">
         {renderFileContent(activeFile)}
       </div>
