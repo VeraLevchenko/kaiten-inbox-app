@@ -63,13 +63,12 @@ const FileTabs = ({ files, incomingNo, cardId }) => {
       );
     }
 
-    // DOCX - показываем через Google Docs Viewer
+   // DOCX - показываем через Google Docs Viewer
     if (['docx', 'doc'].includes(ext)) {
-      // Используем публичный URL для Google Docs Viewer
-      const filePublicUrl = `${publicUrl}/files/${incomingNo}/${encodeURIComponent(file.name)}`;
+      const filePublicUrl = `${publicUrl}/public-files/${incomingNo}/${encodeURIComponent(file.name)}`;
       const viewerUrl = `https://docs.google.com/viewer?url=${encodeURIComponent(filePublicUrl)}&embedded=true`;
       
-      console.log('[DEBUG] DOCX viewer URL:', viewerUrl);
+      console.log('[DEBUG] DOCX Google viewer URL:', viewerUrl);
       
       return (
         <iframe

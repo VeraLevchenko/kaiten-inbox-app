@@ -1,10 +1,10 @@
 """
 Kaiten Inbox App - Backend
 FastAPI приложение для распределения входящих писем
-ЭТАП 5 (финальная версия): Назначение через members с правильными roles
+ЭТАП 5 (финальная версия) + Авторизация
 """
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,8 +14,9 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Импортируем KaitenClient
+# Импортируем модули
 from kaiten_client import get_kaiten_client
+import auth
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -87,6 +88,23 @@ class AssignRequest(BaseModel):
 class SkipRequest(BaseModel):
     """Запрос на пропуск письма"""
     card_id: int
+
+# ============================================================================
+# Функции авторизации
+# ============================================================================
+
+def get_current_user(authorization: Optional[str] = Header(None)) -> str:
+    """Получить текущего пользователя из токена"""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    token = authorization.replace("Bearer ", "")
+    username = auth.verify_token(token)
+    
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    return username
 
 # ============================================================================
 # Вспомогательные функции
@@ -181,7 +199,7 @@ def build_app_state() -> AppState:
     )
 
 # ============================================================================
-# API Endpoints
+# API Endpoints - Публичные (без авторизации)
 # ============================================================================
 
 @app.get("/")
@@ -189,9 +207,12 @@ async def root():
     """Главная страница API"""
     return {
         "app": "Kaiten Inbox API",
-        "version": "1.0.0 - ЭТАП 5 (final)",
+        "version": "1.0.0 - ЭТАП 5 + Auth",
         "status": "running",
         "endpoints": {
+            "login": "/api/login",
+            "logout": "/api/logout",
+            "verify": "/api/verify",
             "state": "/api/state",
             "assign": "/api/assign",
             "skip": "/api/skip",
@@ -203,8 +224,63 @@ async def root():
         "assigned_this_session": assigned_session_count
     }
 
+@app.post("/api/login")
+async def login(credentials: dict):
+    """
+    Авторизация пользователя
+    
+    Body: {"username": "lvs", "password": "763202"}
+    """
+    username = credentials.get("username")
+    password = credentials.get("password")
+    
+    if auth.verify_credentials(username, password):
+        token = auth.create_session(username)
+        return {
+            "success": True,
+            "token": token,
+            "username": username
+        }
+    else:
+        raise HTTPException(
+            status_code=401,
+            detail="Неверный логин или пароль"
+        )
+
+@app.post("/api/logout")
+async def logout(authorization: Optional[str] = Header(None)):
+    """Выход из системы"""
+    if authorization:
+        token = authorization.replace("Bearer ", "")
+        auth.delete_session(token)
+    return {"success": True}
+
+@app.get("/api/verify")
+async def verify(authorization: Optional[str] = Header(None)):
+    """Проверка токена сессии"""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    token = authorization.replace("Bearer ", "")
+    username = auth.verify_token(token)
+    
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    return {"username": username}
+
+@app.get("/api/public-url")
+async def get_public_url():
+    """Вернуть публичный URL backend для внешних сервисов"""
+    public_url = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
+    return {"public_url": public_url}
+
+# ============================================================================
+# API Endpoints - Защищённые (требуют авторизацию)
+# ============================================================================
+
 @app.get("/api/state", response_model=AppState)
-async def get_state():
+async def get_state(username: str = Depends(get_current_user)):
     """
     Получить текущее состояние очереди
     
@@ -227,7 +303,26 @@ async def get_state():
         )
 
 @app.post("/api/assign", response_model=AppState)
-async def assign_card(request: AssignRequest):
+async def assign_card(request: AssignRequest, username: str = Depends(get_current_user)):
+    """
+    Назначить исполнителя на карточку
+    ЭТАП 5 (final): Назначение через members с правильными roles
+    
+    Логика:
+    1. Удалить всех текущих members
+    2. Добавить первого исполнителя как member
+    3. Изменить его роль на type: 2 (ответственный)
+    4. Добавить остальных как members с type: 1 (участники)
+    5. Добавить комментарий, если есть
+    6. Переместить карточку в колонку "Назначить исполнителя"
+    7. Проверить и удалить лишних members
+    
+    Args:
+        request: Данные о назначении
+        
+    Returns:
+        AppState: Обновленное состояние
+    """
     global assigned_session_count
     
     client = get_kaiten_client()
@@ -280,8 +375,7 @@ async def assign_card(request: AssignRequest):
         print(f"[STEP 6] Result: {'SUCCESS' if success else 'FAILED'}")
         if not success:
             raise HTTPException(status_code=500, detail="Failed to move card")
-
-
+        
         # ========== ШАГ 7: ПРОВЕРКА MEMBERS ==========
         print(f"\n[STEP 7] Verifying members...")
         card = client.get_card(request.card_id)
@@ -294,7 +388,7 @@ async def assign_card(request: AssignRequest):
             print(f"  Expected members: {allowed_ids}")
             
             # Список лишних для удаления
-            to_remove = []  # <-- ЭТА СТРОКА ОБЯЗАТЕЛЬНА!
+            to_remove = []
             
             # Проверяем каждого member
             for member in members:
@@ -342,7 +436,7 @@ async def assign_card(request: AssignRequest):
         raise HTTPException(status_code=500, detail=f"Failed to assign card: {str(e)}")
 
 @app.post("/api/skip", response_model=AppState)
-async def skip_card(request: SkipRequest):
+async def skip_card(request: SkipRequest, username: str = Depends(get_current_user)):
     """
     Пропустить текущую карточку (Skip)
     TODO: ЭТАП 6
@@ -357,7 +451,7 @@ async def skip_card(request: SkipRequest):
     return build_app_state()
 
 @app.post("/api/undo", response_model=AppState)
-async def undo_last_action():
+async def undo_last_action(username: str = Depends(get_current_user)):
     """
     Отменить последнее действие
     TODO: ЭТАП 6
@@ -368,19 +462,36 @@ async def undo_last_action():
     print(f"[TODO ЭТАП 6] Undo last action")
     return build_app_state()
 
-@app.get("/api/public-url")
-async def get_public_url():
-    """Вернуть публичный URL backend для внешних сервисов"""
-    public_url = os.getenv("BACKEND_PUBLIC_URL", "http://localhost:8000")
-    return {"public_url": public_url}
-
 @app.get("/files/{incoming_no}/{filename}")
-async def get_file(incoming_no: int, filename: str):
+async def get_file(
+    incoming_no: int, 
+    filename: str, 
+    token: Optional[str] = None,
+    authorization: Optional[str] = Header(None)
+):
     """
     Получить файл письма для просмотра в браузере
+    Поддерживает авторизацию через ?token=XXX или Authorization header
+    
+    Args:
+        incoming_no: Входящий номер письма
+        filename: Имя файла
+        token: Опциональный токен авторизации через query parameter
+        
+    Returns:
+        FileResponse: Файл для просмотра
     """
     import mimetypes
     import urllib.parse
+    
+    # Если токен передан через URL - проверяем его
+    if token:
+        verified_username = auth.verify_token(token)
+        if not verified_username:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        # Используем username из токена
+        username = verified_username
+    # Иначе username уже проверен через Depends(get_current_user)
     
     # Защита от path traversal
     if ".." in filename or "/" in filename or "\\" in filename:
@@ -418,7 +529,6 @@ async def get_file(incoming_no: int, filename: str):
         disposition = 'inline'
     elif ext in ['.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']:
         # Office документы - предлагаем скачать
-        # (браузер не может показать их напрямую)
         mime_type = mime_type or 'application/octet-stream'
         disposition = 'attachment'
     else:
@@ -444,6 +554,44 @@ async def get_file(incoming_no: int, filename: str):
             "Content-Disposition": content_disposition
         }
     )
+
+@app.get("/public-files/{incoming_no}/{filename}")
+async def get_public_file(incoming_no: int, filename: str):
+    """
+    Публичный доступ к файлам для внешних viewers (Google Docs, Office Online)
+    БЕЗ авторизации - используется только для просмотра через iframe
+    """
+    import mimetypes
+    import urllib.parse
+    
+    # Защита от path traversal
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    
+    # Формируем путь к файлу
+    file_path = FILES_ROOT / str(incoming_no) / filename
+    
+    # Проверяем существование
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {filename}")
+    
+    # Определяем MIME-тип
+    mime_type, _ = mimetypes.guess_type(filename)
+    mime_type = mime_type or 'application/octet-stream'
+    
+    # Кодируем имя файла
+    encoded_filename = urllib.parse.quote(filename)
+    
+    print(f"[DEBUG] Public file request: {incoming_no}/{filename}")
+    
+    return FileResponse(
+        path=str(file_path),
+        media_type=mime_type,
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{encoded_filename}"
+        }
+    )
+
 # ============================================================================
 # Запуск приложения
 # ============================================================================
@@ -455,11 +603,12 @@ if __name__ == "__main__":
     host = os.getenv("BACKEND_HOST", "0.0.0.0")
     port = int(os.getenv("BACKEND_PORT", "8000"))
     
-    print(f"🚀 Starting Kaiten Inbox Backend (ЭТАП 5 - Final)")
+    print(f"🚀 Starting Kaiten Inbox Backend (ЭТАП 5 + Auth)")
     print(f"📍 Server: http://{host}:{port}")
     print(f"📚 Docs: http://{host}:{port}/docs")
     print(f"📁 Files root: {FILES_ROOT}")
     print(f"✅ Members-based assignment enabled!")
+    print(f"🔒 Authentication enabled: {auth.VALID_USERNAME}")
     
     uvicorn.run(
         "main:app",

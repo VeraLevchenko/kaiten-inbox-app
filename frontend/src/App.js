@@ -3,13 +3,19 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Stack from './components/Stack';
 import FileTabs from './components/FileTabs';
 import AssigneeButtons from './components/AssigneeButtons';
-import { getState, assignCard, skipCard, undoLastAction } from './services/api';
+import Login from './components/Login';
+import { getState, assignCard, skipCard, undoLastAction, verifyToken, logout } from './services/api';
 import './App.css';
 
 // Импортируем список исполнителей
 import employeesData from './employees.json';
 
 function App() {
+  // Состояние авторизации
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [username, setUsername] = useState('');
+
   // Состояние приложения
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -21,8 +27,36 @@ function App() {
   const [commentText, setCommentText] = useState('');
   const [showCommentModal, setShowCommentModal] = useState(false);
 
-  // Загрузка состояния при старте
+  // Проверяем токен при загрузке
   useEffect(() => {
+    const checkAuth = async () => {
+      const token = localStorage.getItem('authToken');
+      const savedUsername = localStorage.getItem('username');
+      
+      if (token && savedUsername) {
+        // Проверяем что токен валидный
+        const result = await verifyToken();
+        if (result && result.username) {
+          setIsAuthenticated(true);
+          setUsername(result.username);
+          console.log('[APP] Authenticated as:', result.username);
+        } else {
+          // Токен невалидный - чистим
+          localStorage.removeItem('authToken');
+          localStorage.removeItem('username');
+        }
+      }
+      
+      setIsAuthLoading(false);
+    };
+
+    checkAuth();
+  }, []);
+
+  // Загрузка состояния при старте (только если авторизован)
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    
     loadState();
     
     // Автообновление каждые 5 секунд
@@ -31,10 +65,29 @@ function App() {
     }, 5000);
     
     return () => clearInterval(interval);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
+
+  // Обработчик успешного логина
+  const handleLoginSuccess = (token, username) => {
+    setIsAuthenticated(true);
+    setUsername(username);
+    console.log('[APP] Login success:', username);
+  };
+
+  // Обработчик выхода
+  const handleLogout = async () => {
+    await logout();
+    setIsAuthenticated(false);
+    setUsername('');
+    setState(null);
+    console.log('[APP] Logged out');
+  };
 
   // Функция загрузки состояния
   const loadState = async () => {
+    if (!isAuthenticated) return;
+    
     try {
       setLoading(true);
       const data = await getState();
@@ -144,7 +197,8 @@ function App() {
     }
   };
 
-  if (loading && !state) {
+  // Показываем загрузку проверки авторизации
+  if (isAuthLoading) {
     return (
       <div className="app-loading">
         <div className="spinner" />
@@ -153,11 +207,40 @@ function App() {
     );
   }
 
+  // Если не авторизован - показываем логин
+  if (!isAuthenticated) {
+    return (
+      <div className="app">
+        <Login onLoginSuccess={handleLoginSuccess} />
+      </div>
+    );
+  }
+
+  // Если загружаем данные первый раз
+  if (loading && !state) {
+    return (
+      <div className="app-loading">
+        <div className="spinner" />
+        <p>Загрузка данных...</p>
+      </div>
+    );
+  }
+
+  // Главный экран приложения (авторизован)
   return (
     <div className="app">
-      {/* Заголовок */}
+      {/* Заголовок с кнопкой выхода */}
       <header className="app-header">
         <h1>Распределение входящих писем</h1>
+        <div className="header-info">
+          <div className="user-info">
+            <span className="user-icon">👤</span>
+            <span className="username">{username}</span>
+          </div>
+          <button onClick={handleLogout} className="logout-button">
+            Выход
+          </button>
+        </div>
         {error && <div className="error-message">{error}</div>}
       </header>
 
