@@ -65,6 +65,17 @@ last_action: Optional[Dict[str, Any]] = None
 #   "timestamp": datetime
 # }
 
+# ЭТАП 9: Хранение пропущенных карточек (Skip) с партиями
+deferred: List[Dict[str, Any]] = []
+# Структура элемента: {
+#   "card_id": int,
+#   "incoming_no": int,
+#   "party_end": int,  # максимальный incoming_no партии на момент Skip
+#   "deferred_at": datetime
+# }
+
+deferred_set: set = set()  # Для быстрой проверки, пропущена ли карточка
+
 # ============================================================================
 # Модели данных
 # ============================================================================
@@ -172,36 +183,109 @@ def get_files_for_card(incoming_no: int) -> List[FileInfo]:
 def build_app_state() -> AppState:
     """
     Построить текущее состояние приложения на основе данных из Kaiten
+    ЭТАП 9: С учетом логики deferred (пропущенных карточек)
     
     Returns:
         AppState: Состояние приложения
     """
-    global assigned_session_count
+    global assigned_session_count, deferred, deferred_set
     
     client = get_kaiten_client()
     
     # Получаем карточки из очереди с входящим номером
     queue_cards = client.get_queue_cards_with_incoming_no()
     
+    # ДИАГНОСТИКА
+    print(f"[BUILD_STATE] ===== START =====")
+    print(f"[BUILD_STATE] Queue cards count: {len(queue_cards)}")
+    print(f"[BUILD_STATE] Deferred count: {len(deferred)}")
+    print(f"[BUILD_STATE] Deferred set: {deferred_set}")
+    if queue_cards:
+        print(f"[BUILD_STATE] Queue incoming_nos: {[c['_incoming_no'] for c in queue_cards]}")
+    
     # Счётчики
     queue_count = len(queue_cards)
-    deferred_count = 0  # TODO: ЭТАП 6
+    deferred_count = len(deferred)
     
-    # Текущая карточка = первая в очереди (минимальный incoming_no)
+    # ЭТАП 9: Выбор current_card с учётом deferred
     current_card = None
-    if queue_cards:
-        first_card = queue_cards[0]
-        incoming_no = first_card["_incoming_no"]
+    
+    if deferred:
+        # Есть пропущенные карточки - применяем логику партий
+        party_end = deferred[0]["party_end"]
         
-        # Получаем файлы для карточки из реальной папки
-        files = get_files_for_card(incoming_no)
+        print(f"[BUILD_STATE] Deferred mode: party_end={party_end}, deferred_count={deferred_count}")
         
-        current_card = CurrentCard(
-            card_id=first_card["id"],
-            title=first_card["title"],
-            incoming_no=incoming_no,
-            files=files
-        )
+        # Ищем первую НЕ отложенную карточку с incoming_no <= party_end
+        found_in_queue = False
+        for card in queue_cards:
+            card_id = card["id"]
+            incoming_no = card["_incoming_no"]
+            
+            print(f"[BUILD_STATE]   Checking card_id={card_id}, incoming_no={incoming_no}, in_deferred={card_id in deferred_set}")
+            
+            # Пропускаем карточки из deferred_set
+            if card_id in deferred_set:
+                print(f"[BUILD_STATE]   SKIP (in deferred_set)")
+                continue
+            
+            # Берем первую карточку с incoming_no <= party_end
+            if incoming_no <= party_end:
+                print(f"[BUILD_STATE]   MATCH! (incoming_no {incoming_no} <= party_end {party_end})")
+                print(f"[BUILD_STATE] Selected from queue: card_id={card_id}, incoming_no={incoming_no}")
+                
+                files = get_files_for_card(incoming_no)
+                current_card = CurrentCard(
+                    card_id=card_id,
+                    title=card["title"],
+                    incoming_no=incoming_no,
+                    files=files
+                )
+                found_in_queue = True
+                break
+            else:
+                print(f"[BUILD_STATE]   NO MATCH (incoming_no {incoming_no} > party_end {party_end})")
+        
+        # Если не нашли в очереди - отдаем первую отложенную
+        if not found_in_queue and deferred:
+            deferred_card = deferred[0]
+            card_id = deferred_card["card_id"]
+            incoming_no = deferred_card["incoming_no"]
+            
+            print(f"[BUILD_STATE] No cards <= party_end, returning deferred: card_id={card_id}, incoming_no={incoming_no}")
+            
+            # Получаем полную информацию о карточке из Kaiten
+            card_data = client.get_card(card_id)
+            if card_data:
+                files = get_files_for_card(incoming_no)
+                current_card = CurrentCard(
+                    card_id=card_id,
+                    title=card_data["title"],
+                    incoming_no=incoming_no,
+                    files=files
+                )
+    else:
+        # Нет пропущенных - берем первую из очереди
+        if queue_cards:
+            first_card = queue_cards[0]
+            card_id = first_card["id"]
+            incoming_no = first_card["_incoming_no"]
+            
+            print(f"[BUILD_STATE] Normal mode: card_id={card_id}, incoming_no={incoming_no}")
+            
+            files = get_files_for_card(incoming_no)
+            current_card = CurrentCard(
+                card_id=card_id,
+                title=first_card["title"],
+                incoming_no=incoming_no,
+                files=files
+            )
+    
+    print(f"[BUILD_STATE] ===== END =====")
+    if current_card:
+        print(f"[BUILD_STATE] Result: incoming_no={current_card.incoming_no}, card_id={current_card.card_id}")
+    else:
+        print(f"[BUILD_STATE] Result: No current card")
     
     return AppState(
         queue_count=queue_count,
@@ -336,8 +420,7 @@ async def assign_card(request: AssignRequest, username: str = Depends(get_curren
     Returns:
         AppState: Обновленное состояние
     """
-    global assigned_session_count, last_action
-    
+    global assigned_session_count, last_action, deferred, deferred_set    
     client = get_kaiten_client()
     
     try:
@@ -400,6 +483,24 @@ async def assign_card(request: AssignRequest, username: str = Depends(get_curren
         if request.comment_text and request.comment_text.strip():
             print(f"\n[STEP 5] Adding comment...")
             client.add_comment(request.card_id, request.comment_text)
+
+        # ========== ЭТАП 9: УДАЛЕНИЕ ИЗ DEFERRED (если была пропущена) ==========
+        print(f"\n[ASSIGN] Checking if card was deferred...")
+        if request.card_id in deferred_set:
+            print(f"[ASSIGN] Card {request.card_id} was deferred, removing from deferred list...")
+            
+            # Удаляем из deferred_set
+            deferred_set.discard(request.card_id)
+            
+            # Удаляем из deferred list
+            original_count = len(deferred)
+            deferred[:] = [d for d in deferred if d["card_id"] != request.card_id]
+            removed_count = original_count - len(deferred)
+            
+            print(f"[ASSIGN] Removed from deferred: {removed_count} entries")
+            print(f"[ASSIGN] Remaining deferred: {len(deferred)}")
+        else:
+            print(f"[ASSIGN] Card was not deferred, skipping cleanup")
         
         # Шаг 6: Переместить карточку
         print(f"\n[STEP 6] Moving card to column...")
@@ -472,7 +573,15 @@ async def assign_card(request: AssignRequest, username: str = Depends(get_curren
 async def skip_card(request: SkipRequest, username: str = Depends(get_current_user)):
     """
     Пропустить текущую карточку (Skip)
-    TODO: ЭТАП 6
+    ЭТАП 9: Логика партий
+    
+    Логика:
+    1. Получить актуальный список карточек из очереди
+    2. Вычислить party_end = MAX(incoming_no) среди всех карточек
+    3. Получить incoming_no пропускаемой карточки
+    4. Добавить запись в deferred с party_end
+    5. Добавить card_id в deferred_set
+    6. Вернуть следующую карточку
     
     Args:
         request: ID карточки для пропуска
@@ -480,8 +589,80 @@ async def skip_card(request: SkipRequest, username: str = Depends(get_current_us
     Returns:
         AppState: Обновленное состояние
     """
-    print(f"[TODO ЭТАП 6] Skip card {request.card_id}")
-    return build_app_state()
+    global deferred, deferred_set
+    
+    client = get_kaiten_client()
+    
+    try:
+        print("="*60)
+        print(f"[SKIP] ===== STARTING SKIP =====")
+        print(f"[SKIP] Card ID: {request.card_id}")
+        print("="*60)
+        
+        # Шаг 1: Получить актуальный список карточек из очереди
+        print(f"\n[SKIP STEP 1] Getting current queue...")
+        queue_cards = client.get_queue_cards_with_incoming_no()
+        print(f"[SKIP STEP 1] Queue size: {len(queue_cards)}")
+        
+        if not queue_cards:
+            print("[SKIP] Error: Queue is empty!")
+            raise HTTPException(status_code=400, detail="Queue is empty")
+        
+        # Шаг 2: Вычислить party_end = MAX(incoming_no)
+        print(f"\n[SKIP STEP 2] Calculating party_end...")
+        party_end = max(card["_incoming_no"] for card in queue_cards)
+        print(f"[SKIP STEP 2] party_end = {party_end}")
+        
+        # Шаг 3: Получить incoming_no пропускаемой карточки
+        print(f"\n[SKIP STEP 3] Finding incoming_no for card {request.card_id}...")
+        
+        skipped_incoming_no = None
+        for card in queue_cards:
+            if card["id"] == request.card_id:
+                skipped_incoming_no = card["_incoming_no"]
+                break
+        
+        if skipped_incoming_no is None:
+            print(f"[SKIP] Error: Card {request.card_id} not found in queue!")
+            raise HTTPException(status_code=400, detail="Card not found in queue")
+        
+        print(f"[SKIP STEP 3] incoming_no = {skipped_incoming_no}")
+        
+        # Шаг 4: Добавить запись в deferred
+        print(f"\n[SKIP STEP 4] Adding to deferred list...")
+        
+        deferred_entry = {
+            "card_id": request.card_id,
+            "incoming_no": skipped_incoming_no,
+            "party_end": party_end,
+            "deferred_at": datetime.now()
+        }
+        
+        deferred.append(deferred_entry)
+        print(f"[SKIP STEP 4] Added to deferred: {deferred_entry}")
+        
+        # Шаг 5: Добавить card_id в deferred_set
+        print(f"\n[SKIP STEP 5] Adding to deferred_set...")
+        deferred_set.add(request.card_id)
+        print(f"[SKIP STEP 5] deferred_set size: {len(deferred_set)}")
+        
+        print(f"\n[SUCCESS] ===== SKIP COMPLETE =====")
+        print(f"[SUCCESS] Total deferred: {len(deferred)}")
+        print(f"[SUCCESS] Deferred cards: {[d['incoming_no'] for d in deferred]}")
+        print("="*60)
+        
+        # Шаг 6: Вернуть обновленное состояние
+        return build_app_state()
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"\n[ERROR] ===== SKIP FAILED =====")
+        print(f"[ERROR] {e}")
+        import traceback
+        traceback.print_exc()
+        print("="*60)
+        raise HTTPException(status_code=500, detail=f"Failed to skip card: {str(e)}")
 
 @app.post("/api/undo", response_model=AppState)
 async def undo_last_action(username: str = Depends(get_current_user)):
