@@ -13,7 +13,7 @@ const Login = ({ onLoginSuccess }) => {
     setLoading(true);
 
     try {
-      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/login`, {
+      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8010'}/api/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -24,13 +24,9 @@ const Login = ({ onLoginSuccess }) => {
       const data = await response.json();
 
       if (response.ok && data.success) {
-        // Сохраняем токен в localStorage
         localStorage.setItem('authToken', data.token);
         localStorage.setItem('username', data.username);
-        
         console.log('[LOGIN] Success:', data.username);
-        
-        // Вызываем callback успешного логина
         onLoginSuccess(data.token, data.username);
       } else {
         setError(data.detail || 'Ошибка авторизации');
@@ -44,9 +40,19 @@ const Login = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div className="login-container">
-      <div className="login-box">
-        <h1 className="login-title">Распределение входящих писем</h1>
+    <div className="login-page">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-brand-mark">
+            <svg viewBox="0 0 24 24">
+              <path d="M4 4h16v2H4V4zm0 4h16v2H4V8zm0 4h10v2H4v-2zm0 4h7v2H4v-2z"/>
+              <path d="M17 14l-1.5 1.5L17 17l4-4-4-4-1.5 1.5L17 12" strokeWidth="0" fill="white" opacity="0.85"/>
+            </svg>
+          </div>
+          <h1 className="login-title">Входящие письма</h1>
+          <p className="login-subtitle">Система распределения документов</p>
+        </div>
+
         <form onSubmit={handleSubmit} className="login-form">
           <div className="form-group">
             <label htmlFor="username">Логин</label>
@@ -61,7 +67,7 @@ const Login = ({ onLoginSuccess }) => {
               required
             />
           </div>
-          
+
           <div className="form-group">
             <label htmlFor="password">Пароль</label>
             <input
@@ -76,13 +82,11 @@ const Login = ({ onLoginSuccess }) => {
           </div>
 
           {error && (
-            <div className="error-message">
-              {error}
-            </div>
+            <div className="error-message">{error}</div>
           )}
 
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             className="login-button"
             disabled={loading}
           >

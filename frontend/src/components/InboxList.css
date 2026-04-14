@@ -1,14 +1,16 @@
 .inbox-list {
-  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .inbox-list-label {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 9px;
+  font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #8b949e;
-  padding: 0 4px 6px;
+  letter-spacing: 0.1em;
+  color: var(--text-3);
+  padding: 0 8px 8px;
 }
 
 .inbox-list-item {
@@ -16,30 +18,31 @@
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 8px 12px;
-  margin-bottom: 4px;
-  background: #161b22;
-  border: 1px solid #30363d;
-  border-radius: 6px;
-  color: #c9d1d9;
+  padding: 7px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
   font-size: 13px;
+  font-family: var(--font);
   text-align: left;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: all 0.12s;
+  font-weight: 500;
 }
 
 .inbox-list-item:hover:not(.active) {
-  background: #1f2937;
-  border-color: #58a6ff;
-  color: #e6edf3;
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text-1);
 }
 
 .inbox-list-item.active {
-  background: #0d1117;
-  border-color: #58a6ff;
-  color: #58a6ff;
+  background: var(--accent-light);
+  border-color: var(--accent-border);
+  color: var(--accent);
   cursor: default;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .inbox-list-name {
@@ -50,10 +53,10 @@
 }
 
 .inbox-active-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: #58a6ff;
-  margin-left: 8px;
+  background: var(--accent);
+  margin-left: 6px;
   flex-shrink: 0;
 }

@@ -282,7 +282,7 @@ function App() {
         </div>
         <div className="header-info">
           <div className="user-info">
-            <span className="user-icon">👤</span>
+            <span className="user-avatar">{username.charAt(0).toUpperCase()}</span>
             <span className="username">{username}</span>
           </div>
           <button onClick={handleLogout} className="logout-button">
@@ -394,7 +394,8 @@ function App() {
               </AnimatePresence>
             ) : (
               <div className="no-letters">
-                <p>📭 Нет писем в очереди</p>
+                <div className="no-letters-icon">📭</div>
+                <p>Нет писем в очереди</p>
               </div>
             )}
           </div>
