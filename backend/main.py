@@ -10,6 +10,11 @@ from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from fastapi import HTTPException
+
 from pydantic import BaseModel
 from typing import Optional, List
 import os
@@ -298,8 +303,8 @@ def build_app_state() -> AppState:
 # API Endpoints - Публичные (без авторизации)
 # ============================================================================
 
-@app.get("/")
-async def root():
+@app.get("/api/health", include_in_schema=False)
+async def api_health():
     """Главная страница API"""
     return {
         "app": "Kaiten Inbox API",
@@ -907,3 +912,26 @@ if __name__ == "__main__":
         port=port,
         reload=True
     )
+
+# ================================
+# Frontend (React build) serving
+# ================================
+FRONTEND_BUILD_DIR = Path("/home/vs/kaiten-inbox-app/frontend/build")
+
+if FRONTEND_BUILD_DIR.exists():
+    static_dir = FRONTEND_BUILD_DIR / "static"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def frontend_root():
+        return FileResponse(str(FRONTEND_BUILD_DIR / "index.html"))
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def frontend_spa(full_path: str):
+        # Не трогаем API и файлы
+        if full_path.startswith(("api/", "files/", "static/")):
+            raise HTTPException(status_code=404, detail="Not found")
+        return FileResponse(str(FRONTEND_BUILD_DIR / "index.html"))
+else:
+    print(f"[WARN] Frontend build not found: {FRONTEND_BUILD_DIR}")

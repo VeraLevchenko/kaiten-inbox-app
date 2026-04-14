@@ -76,3 +76,13 @@ Frontend будет доступен на http://localhost:3000
 - Node.js 16+
 - Доступ к API Kaiten с токеном
 - Папка с файлами писем (FILES_ROOT)
+
+
+## Команды для перезапуска
+
+sudo systemctl stop kaiten-inbox-backend.service
+cd ~/kaiten-inbox-app
+npm run build
+sudo systemctl daemon-reload
+sudo systemctl start kaiten-inbox-backend.service
+sudo systemctl status kaiten-inbox-backend.service
