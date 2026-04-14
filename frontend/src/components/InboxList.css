@@ -1,0 +1,59 @@
+.inbox-list {
+  margin-bottom: 12px;
+}
+
+.inbox-list-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8b949e;
+  padding: 0 4px 6px;
+}
+
+.inbox-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  margin-bottom: 4px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #c9d1d9;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.inbox-list-item:hover:not(.active) {
+  background: #1f2937;
+  border-color: #58a6ff;
+  color: #e6edf3;
+}
+
+.inbox-list-item.active {
+  background: #0d1117;
+  border-color: #58a6ff;
+  color: #58a6ff;
+  cursor: default;
+  font-weight: 600;
+}
+
+.inbox-list-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-active-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #58a6ff;
+  margin-left: 8px;
+  flex-shrink: 0;
+}

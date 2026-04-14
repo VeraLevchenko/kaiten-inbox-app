@@ -6,6 +6,7 @@ Kaiten API Client
 import httpx
 from typing import List, Dict, Optional
 import os
+import time
 from dotenv import load_dotenv
 
 # Загружаем переменные окружения
@@ -43,29 +44,47 @@ class KaitenClient:
             },
             timeout=30.0
         )
+
+    def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """
+        Выполнить HTTP-запрос с retry при 429.
+        Raises httpx.HTTPError при финальной ошибке.
+        """
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            response = self.client.request(method, url, **kwargs)
+            if response.status_code == 429:
+                if attempt < max_retries:
+                    wait = 2 ** (attempt + 1)  # 2s, 4s
+                    print(f"[WARN] 429 on {method} {url}, retry {attempt + 1}/{max_retries} in {wait}s")
+                    time.sleep(wait)
+                    continue
+                else:
+                    print(f"[ERROR] 429 on {method} {url}, retries exhausted")
+                    response.raise_for_status()
+            response.raise_for_status()
+            return response
+        response.raise_for_status()  # не достижимо, но для mypy
+        return response
     
     def get_cards_from_column(self, column_id: int) -> List[Dict]:
         """
         Получить карточки из указанной колонки
-        
+
         Args:
             column_id: ID колонки
-            
+
         Returns:
             List[Dict]: Список карточек
         """
         try:
-            # Правильный endpoint: GET /cards с параметрами
             url = f"{self.base_url}/cards"
             params = {
                 "board_id": self.board_id,
                 "column_id": column_id,
                 "condition": 1  # 1 = на доске, 2 = архив
             }
-            
-            response = self.client.get(url, params=params)
-            response.raise_for_status()
-            
+            response = self._request("GET", url, params=params)
             cards = response.json()
             print(f"[INFO] Got {len(cards)} cards from column {column_id}")
             return cards
@@ -73,16 +92,20 @@ class KaitenClient:
             print(f"[ERROR] Failed to get cards from column {column_id}: {e}")
             return []
     
-    def get_queue_cards_with_incoming_no(self) -> List[Dict]:
+    def get_queue_cards_with_incoming_no(self, column_id: Optional[int] = None) -> List[Dict]:
         """
         Получить карточки из колонки "Очередь" с входящим номером
         Фильтрует только карточки, у которых есть properties.id_228499
-        
+
+        Args:
+            column_id: ID колонки очереди. Если None — использует self.column_queue_id
+
         Returns:
             List[Dict]: Отфильтрованные и отсортированные карточки
         """
         # Получаем карточки из колонки "Очередь"
-        all_cards = self.get_cards_from_column(self.column_queue_id)
+        col = column_id if column_id is not None else self.column_queue_id
+        all_cards = self.get_cards_from_column(col)
         
         # Фильтруем карточки с входящим номером
         filtered_cards = []
@@ -113,17 +136,16 @@ class KaitenClient:
     def get_card(self, card_id: int) -> Optional[Dict]:
         """
         Получить полную информацию о карточке по ID
-        
+
         Args:
             card_id: ID карточки
-            
+
         Returns:
             Dict: Данные карточки или None
         """
         try:
             url = f"{self.base_url}/cards/{card_id}"
-            response = self.client.get(url)
-            response.raise_for_status()
+            response = self._request("GET", url)
             return response.json()
         except httpx.HTTPError as e:
             print(f"[ERROR] Failed to get card {card_id}: {e}")
@@ -142,11 +164,7 @@ class KaitenClient:
         """
         try:
             url = f"{self.base_url}/cards/{card_id}"
-            data = {"column_id": column_id}
-            
-            response = self.client.patch(url, json=data)
-            response.raise_for_status()
-            
+            self._request("PATCH", url, json={"column_id": column_id})
             print(f"[INFO] Card {card_id} moved to column {column_id}")
             return True
         except httpx.HTTPError as e:
@@ -166,11 +184,7 @@ class KaitenClient:
         """
         try:
             url = f"{self.base_url}/cards/{card_id}/members"
-            data = {"user_id": user_id}
-            
-            response = self.client.post(url, json=data)
-            response.raise_for_status()
-            
+            self._request("POST", url, json={"user_id": user_id})
             print(f"[INFO] User {user_id} added as member to card {card_id}")
             return True
         except httpx.HTTPError as e:
@@ -191,11 +205,7 @@ class KaitenClient:
         """
         try:
             url = f"{self.base_url}/cards/{card_id}/members/{user_id}"
-            data = {"type": role_type}
-            
-            response = self.client.patch(url, json=data)
-            response.raise_for_status()
-            
+            self._request("PATCH", url, json={"type": role_type})
             role_name = "ответственный" if role_type == 2 else "участник"
             print(f"[INFO] User {user_id} role changed to {role_name} on card {card_id}")
             return True
@@ -226,10 +236,13 @@ class KaitenClient:
                 user_id = member.get('user_id')
                 if user_id:
                     url = f"{self.base_url}/cards/{card_id}/members/{user_id}"
-                    response = self.client.delete(url)
-                    # 200 = успешно, 404 = уже удалён
-                    if response.status_code not in [200, 404]:
-                        response.raise_for_status()
+                    try:
+                        self._request("DELETE", url)
+                    except httpx.HTTPStatusError as e:
+                        if e.response.status_code == 404:
+                            pass  # уже удалён
+                        else:
+                            raise
             
             print(f"[INFO] All members removed from card {card_id}")
             return True
@@ -250,11 +263,7 @@ class KaitenClient:
         """
         try:
             url = f"{self.base_url}/cards/{card_id}/comments"
-            data = {"text": text}
-            
-            response = self.client.post(url, json=data)
-            response.raise_for_status()
-            
+            self._request("POST", url, json={"text": text})
             print(f"[INFO] Comment added to card {card_id}")
             return True
         except httpx.HTTPError as e:

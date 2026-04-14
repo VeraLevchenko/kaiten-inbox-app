@@ -1,6 +1,6 @@
 // API клиент для работы с backend
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8010';
 
 // Получить токен из localStorage
 const getAuthToken = () => {
@@ -63,6 +63,15 @@ export const skipCard = async (cardId) => {
   return response.json();
 };
 
+// Выбрать конкретную карточку из очереди (null = авто-режим)
+export const selectCard = async (cardId) => {
+  const response = await fetchWithAuth(`${API_URL}/api/select`, {
+    method: 'POST',
+    body: JSON.stringify({ card_id: cardId }),
+  });
+  return response.json();
+};
+
 // Отменить последнее действие
 export const undoLastAction = async () => {
   const response = await fetchWithAuth(`${API_URL}/api/undo`, {
@@ -86,6 +95,21 @@ export const verifyToken = async () => {
   } catch (err) {
     return null;
   }
+};
+
+// Получить список входящих (инбоксов)
+export const getInboxes = async () => {
+  const response = await fetchWithAuth(`${API_URL}/api/inboxes`);
+  return response.json();
+};
+
+// Переключить активный инбокс
+export const selectInbox = async (inboxId) => {
+  const response = await fetchWithAuth(`${API_URL}/api/select-inbox`, {
+    method: 'POST',
+    body: JSON.stringify({ inbox_id: inboxId }),
+  });
+  return response.json();
 };
 
 // Выйти из системы

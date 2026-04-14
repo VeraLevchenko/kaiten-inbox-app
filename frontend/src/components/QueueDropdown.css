@@ -1,0 +1,217 @@
+.queue-dropdown {
+  position: relative;
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+/* Кнопка-заголовок */
+.queue-dropdown-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  background: white;
+  border: 2px solid #e0e0e0;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  text-align: left;
+}
+
+.queue-dropdown-toggle:hover {
+  border-color: #aaa;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.queue-dropdown-toggle.open {
+  border-color: #4a90d9;
+  box-shadow: 0 2px 8px rgba(74,144,217,0.15);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.queue-dropdown-toggle.manual {
+  border-color: #f0a500;
+  background: #fffbf0;
+}
+
+.queue-dropdown-toggle.manual.open {
+  border-color: #f0a500;
+  box-shadow: 0 2px 8px rgba(240,165,0,0.2);
+}
+
+/* Левая часть: "Очередь N" */
+.queue-dropdown-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.queue-dropdown-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  background: #4a90d9;
+  color: white;
+  border-radius: 11px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* Бейдж "выбрано вручную" */
+.queue-manual-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  font-size: 11px;
+  font-weight: 500;
+  color: #b07800;
+  background: #fff3cd;
+  border-radius: 6px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.queue-reset-x {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  color: #b07800;
+  line-height: 1;
+  margin-left: 2px;
+  padding: 0 2px;
+  border-radius: 3px;
+  transition: background 0.15s;
+}
+
+.queue-reset-x:hover {
+  background: #f0c060;
+  color: #333;
+}
+
+/* Стрелка */
+.queue-dropdown-arrow {
+  font-size: 10px;
+  color: #888;
+  flex-shrink: 0;
+}
+
+/* Список */
+.queue-dropdown-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: white;
+  border: 2px solid #4a90d9;
+  border-top: 1px solid #e8e8e8;
+  border-bottom-left-radius: 10px;
+  border-bottom-right-radius: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+}
+
+.queue-dropdown-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.queue-dropdown-list::-webkit-scrollbar-track {
+  background: #f5f5f5;
+}
+
+.queue-dropdown-list::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 3px;
+}
+
+.queue-dropdown-empty {
+  padding: 16px;
+  text-align: center;
+  color: #999;
+  font-size: 13px;
+}
+
+/* Строка письма */
+.queue-dropdown-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid #f0f0f0;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  transition: background 0.15s;
+  color: #333;
+}
+
+.queue-dropdown-item:last-child {
+  border-bottom: none;
+}
+
+.queue-dropdown-item:hover {
+  background: #f0f6ff;
+}
+
+.queue-dropdown-item.active {
+  background: #e8f0fe;
+  font-weight: 600;
+  color: #1a56db;
+}
+
+.queue-dropdown-item.active .queue-item-no {
+  color: #1a56db;
+}
+
+/* Отложенные */
+.queue-dropdown-item.deferred {
+  opacity: 0.65;
+}
+
+.queue-dropdown-item.deferred .queue-item-no {
+  color: #e67e00;
+}
+
+/* Содержимое строки */
+.queue-item-no {
+  font-weight: 700;
+  color: #555;
+  flex-shrink: 0;
+  min-width: 52px;
+  font-size: 12px;
+}
+
+.queue-item-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  color: inherit;
+}
+
+.queue-item-deferred-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  background: #fff3cd;
+  color: #b07800;
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}

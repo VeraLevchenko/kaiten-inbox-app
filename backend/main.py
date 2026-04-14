@@ -4,6 +4,7 @@ FastAPI приложение для распределения входящих 
 ЭТАП 5 (финальная версия) + Авторизация
 """
 
+import time as _time
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Request, Header, Depends
@@ -18,6 +19,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 import os
+import json
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -58,6 +60,42 @@ app.add_middleware(
 # Конфигурация из .env
 FILES_ROOT = Path(os.getenv("FILES_ROOT", "../samples"))
 
+# ============================================================================
+# Конфигурация входящих (инбоксов)
+# ============================================================================
+
+def _parse_inboxes() -> List[Dict]:
+    """Загрузить список инбоксов из KAITEN_INBOXES или создать default из старых переменных"""
+    raw = os.getenv("KAITEN_INBOXES")
+    if raw:
+        try:
+            inboxes = json.loads(raw)
+            print(f"[INBOXES] Loaded {len(inboxes)} inboxes from KAITEN_INBOXES")
+            return inboxes
+        except json.JSONDecodeError as e:
+            print(f"[WARN] Failed to parse KAITEN_INBOXES: {e}, using fallback")
+    # Fallback: создаём один инбокс из старых переменных
+    fallback = [{
+        "id": "default",
+        "name": "Входящие",
+        "column_queue_id": int(os.getenv("KAITEN_COLUMN_QUEUE_ID", "0")),
+        "column_assign_id": int(os.getenv("KAITEN_COLUMN_ASSIGN_ID", "0")),
+    }]
+    print(f"[INBOXES] Using fallback inbox config")
+    return fallback
+
+INBOXES_CONFIG: List[Dict] = _parse_inboxes()
+
+# Текущий активный инбокс (по умолчанию — первый в списке)
+selected_inbox_id: str = INBOXES_CONFIG[0]["id"] if INBOXES_CONFIG else "default"
+
+def get_active_inbox() -> Dict:
+    """Вернуть конфиг активного инбокса"""
+    for inbox in INBOXES_CONFIG:
+        if inbox["id"] == selected_inbox_id:
+            return inbox
+    return INBOXES_CONFIG[0]
+
 # Счётчик назначенных карточек за сессию
 assigned_session_count = 0
 
@@ -81,6 +119,14 @@ deferred: List[Dict[str, Any]] = []
 
 deferred_set: set = set()  # Для быстрой проверки, пропущена ли карточка
 
+# Выбранная пользователем карточка (None = авто-выбор)
+selected_card_id: Optional[int] = None
+
+# Кеш последнего успешного состояния (защита от 429)
+_last_good_state: Optional["AppState"] = None
+_last_good_state_ts: float = 0.0
+STATE_CACHE_TTL: float = 60.0  # секунд
+
 # ============================================================================
 # Модели данных
 # ============================================================================
@@ -98,12 +144,27 @@ class CurrentCard(BaseModel):
     incoming_no: int
     files: List[FileInfo]
 
+class QueueItem(BaseModel):
+    """Элемент очереди для выпадающего списка"""
+    card_id: int
+    title: str
+    incoming_no: int
+    is_deferred: bool = False
+
+class InboxInfo(BaseModel):
+    """Информация об одном инбоксе (входящих)"""
+    id: str
+    name: str
+    is_active: bool
+
 class AppState(BaseModel):
     """Состояние приложения"""
     queue_count: int
     deferred_count: int
     assigned_session_count: int
     current_card: Optional[CurrentCard]
+    queue_items: List[QueueItem] = []
+    current_inbox_id: Optional[str] = None
 
 class AssignRequest(BaseModel):
     """Запрос на назначение исполнителя"""
@@ -116,6 +177,14 @@ class AssignRequest(BaseModel):
 class SkipRequest(BaseModel):
     """Запрос на пропуск письма"""
     card_id: int
+
+class SelectRequest(BaseModel):
+    """Запрос на выбор конкретной карточки из очереди"""
+    card_id: Optional[int] = None  # None = сбросить выбор, вернуться к авто
+
+class SelectInboxRequest(BaseModel):
+    """Запрос на переключение активного инбокса"""
+    inbox_id: str
 
 # ============================================================================
 # Функции авторизации
@@ -189,16 +258,22 @@ def build_app_state() -> AppState:
     """
     Построить текущее состояние приложения на основе данных из Kaiten
     ЭТАП 9: С учетом логики deferred (пропущенных карточек)
-    
+
     Returns:
         AppState: Состояние приложения
     """
-    global assigned_session_count, deferred, deferred_set
-    
+    global assigned_session_count, deferred, deferred_set, selected_card_id, _last_good_state, _last_good_state_ts
+
     client = get_kaiten_client()
-    
+    kaiten_call_count = 0
+
+    # Используем колонку активного инбокса
+    active_inbox = get_active_inbox()
+    active_column_queue_id = active_inbox["column_queue_id"]
+
     # Получаем карточки из очереди с входящим номером
-    queue_cards = client.get_queue_cards_with_incoming_no()
+    kaiten_call_count += 1
+    queue_cards = client.get_queue_cards_with_incoming_no(column_id=active_column_queue_id)
     
     # ДИАГНОСТИКА
     print(f"[BUILD_STATE] ===== START =====")
@@ -256,19 +331,24 @@ def build_app_state() -> AppState:
             deferred_card = deferred[0]
             card_id = deferred_card["card_id"]
             incoming_no = deferred_card["incoming_no"]
-            
+
             print(f"[BUILD_STATE] No cards <= party_end, returning deferred: card_id={card_id}, incoming_no={incoming_no}")
-            
-            # Получаем полную информацию о карточке из Kaiten
-            card_data = client.get_card(card_id)
-            if card_data:
-                files = get_files_for_card(incoming_no)
-                current_card = CurrentCard(
-                    card_id=card_id,
-                    title=card_data["title"],
-                    incoming_no=incoming_no,
-                    files=files
-                )
+
+            # Используем сохранённый заголовок; API вызываем только если он отсутствует
+            title = deferred_card.get("title")
+            if not title:
+                print(f"[WARN] Title not cached for deferred card {card_id}, fetching from API")
+                kaiten_call_count += 1
+                card_data = client.get_card(card_id)
+                title = card_data["title"] if card_data else f"Card #{card_id}"
+
+            files = get_files_for_card(incoming_no)
+            current_card = CurrentCard(
+                card_id=card_id,
+                title=title,
+                incoming_no=incoming_no,
+                files=files
+            )
     else:
         # Нет пропущенных - берем первую из очереди
         if queue_cards:
@@ -286,18 +366,53 @@ def build_app_state() -> AppState:
                 files=files
             )
     
+    # Если пользователь выбрал конкретную карточку — показываем её
+    if selected_card_id is not None:
+        selected_in_queue = next((c for c in queue_cards if c["id"] == selected_card_id), None)
+        if selected_in_queue:
+            incoming_no = selected_in_queue["_incoming_no"]
+            files = get_files_for_card(incoming_no)
+            current_card = CurrentCard(
+                card_id=selected_in_queue["id"],
+                title=selected_in_queue["title"],
+                incoming_no=incoming_no,
+                files=files
+            )
+            print(f"[BUILD_STATE] Using selected card: card_id={selected_card_id}, incoming_no={incoming_no}")
+        else:
+            # Карточка исчезла из очереди — сбрасываем выбор
+            print(f"[BUILD_STATE] Selected card {selected_card_id} not in queue, resetting")
+            selected_card_id = None
+
+    # Формируем список всех писем очереди для выпадающего списка
+    queue_items = [
+        QueueItem(
+            card_id=card["id"],
+            title=card["title"],
+            incoming_no=card["_incoming_no"],
+            is_deferred=card["id"] in deferred_set
+        )
+        for card in queue_cards
+    ]
+
     print(f"[BUILD_STATE] ===== END =====")
     if current_card:
         print(f"[BUILD_STATE] Result: incoming_no={current_card.incoming_no}, card_id={current_card.card_id}")
     else:
         print(f"[BUILD_STATE] Result: No current card")
-    
-    return AppState(
+    print(f"[BUILD_STATE] Kaiten API calls this build: {kaiten_call_count}")
+
+    state = AppState(
         queue_count=queue_count,
         deferred_count=deferred_count,
         assigned_session_count=assigned_session_count,
-        current_card=current_card
+        current_card=current_card,
+        queue_items=queue_items,
+        current_inbox_id=selected_inbox_id
     )
+    _last_good_state = state
+    _last_good_state_ts = _time.time()
+    return state
 
 # ============================================================================
 # API Endpoints - Публичные (без авторизации)
@@ -396,7 +511,12 @@ async def get_state(username: str = Depends(get_current_user)):
         print(f"[ERROR] Failed to build app state: {e}")
         import traceback
         traceback.print_exc()
-        # В случае ошибки возвращаем пустое состояние
+        now = _time.time()
+        if _last_good_state is not None and (now - _last_good_state_ts) < STATE_CACHE_TTL:
+            age = now - _last_good_state_ts
+            print(f"[WARN] Returning cached state (age={age:.1f}s) instead of empty state")
+            return _last_good_state
+        print(f"[WARN] No valid cached state available, returning empty state")
         return AppState(
             queue_count=0,
             deferred_count=0,
@@ -425,9 +545,9 @@ async def assign_card(request: AssignRequest, username: str = Depends(get_curren
     Returns:
         AppState: Обновленное состояние
     """
-    global assigned_session_count, last_action, deferred, deferred_set    
+    global assigned_session_count, last_action, deferred, deferred_set, selected_card_id, selected_inbox_id
     client = get_kaiten_client()
-    
+
     try:
         print("="*60)
         print(f"[INFO] ===== STARTING ASSIGNMENT =====")
@@ -509,7 +629,7 @@ async def assign_card(request: AssignRequest, username: str = Depends(get_curren
         
         # Шаг 6: Переместить карточку
         print(f"\n[STEP 6] Moving card to column...")
-        column_assign_id = int(os.getenv("KAITEN_COLUMN_ASSIGN_ID"))
+        column_assign_id = get_active_inbox()["column_assign_id"]
         success = client.move_card(request.card_id, column_assign_id)
         print(f"[STEP 6] Result: {'SUCCESS' if success else 'FAILED'}")
         if not success:
@@ -557,11 +677,12 @@ async def assign_card(request: AssignRequest, username: str = Depends(get_curren
                         print(f"    ❌ Error: {e}")
         
         assigned_session_count += 1
-        
+        selected_card_id = None  # Сбрасываем ручной выбор после назначения
+
         print(f"\n[SUCCESS] ===== ASSIGNMENT COMPLETE =====")
         print(f"[SUCCESS] Total assigned: {assigned_session_count}")
         print("="*60)
-        
+
         return build_app_state()
         
     except HTTPException:
@@ -594,10 +715,10 @@ async def skip_card(request: SkipRequest, username: str = Depends(get_current_us
     Returns:
         AppState: Обновленное состояние
     """
-    global deferred, deferred_set
-    
+    global deferred, deferred_set, selected_card_id
+
     client = get_kaiten_client()
-    
+
     try:
         print("="*60)
         print(f"[SKIP] ===== STARTING SKIP =====")
@@ -618,20 +739,22 @@ async def skip_card(request: SkipRequest, username: str = Depends(get_current_us
         party_end = max(card["_incoming_no"] for card in queue_cards)
         print(f"[SKIP STEP 2] party_end = {party_end}")
         
-        # Шаг 3: Получить incoming_no пропускаемой карточки
+        # Шаг 3: Получить incoming_no и title пропускаемой карточки
         print(f"\n[SKIP STEP 3] Finding incoming_no for card {request.card_id}...")
-        
+
         skipped_incoming_no = None
+        skipped_title = None
         for card in queue_cards:
             if card["id"] == request.card_id:
                 skipped_incoming_no = card["_incoming_no"]
+                skipped_title = card.get("title", "")
                 break
-        
+
         if skipped_incoming_no is None:
             print(f"[SKIP] Error: Card {request.card_id} not found in queue!")
             raise HTTPException(status_code=400, detail="Card not found in queue")
-        
-        print(f"[SKIP STEP 3] incoming_no = {skipped_incoming_no}")
+
+        print(f"[SKIP STEP 3] incoming_no = {skipped_incoming_no}, title = {skipped_title!r}")
         
         # Шаг 4: Добавить запись в deferred
         print(f"\n[SKIP STEP 4] Adding to deferred list...")
@@ -639,6 +762,7 @@ async def skip_card(request: SkipRequest, username: str = Depends(get_current_us
         deferred_entry = {
             "card_id": request.card_id,
             "incoming_no": skipped_incoming_no,
+            "title": skipped_title,
             "party_end": party_end,
             "deferred_at": datetime.now()
         }
@@ -651,11 +775,13 @@ async def skip_card(request: SkipRequest, username: str = Depends(get_current_us
         deferred_set.add(request.card_id)
         print(f"[SKIP STEP 5] deferred_set size: {len(deferred_set)}")
         
+        selected_card_id = None  # Сбрасываем ручной выбор после пропуска
+
         print(f"\n[SUCCESS] ===== SKIP COMPLETE =====")
         print(f"[SUCCESS] Total deferred: {len(deferred)}")
         print(f"[SUCCESS] Deferred cards: {[d['incoming_no'] for d in deferred]}")
         print("="*60)
-        
+
         # Шаг 6: Вернуть обновленное состояние
         return build_app_state()
         
@@ -668,6 +794,41 @@ async def skip_card(request: SkipRequest, username: str = Depends(get_current_us
         traceback.print_exc()
         print("="*60)
         raise HTTPException(status_code=500, detail=f"Failed to skip card: {str(e)}")
+
+@app.post("/api/select", response_model=AppState)
+async def select_card(request: SelectRequest, username: str = Depends(get_current_user)):
+    """
+    Выбрать конкретную карточку из очереди для отображения.
+    card_id=None сбрасывает выбор (возврат к авто-режиму).
+    """
+    global selected_card_id
+    selected_card_id = request.card_id
+    print(f"[SELECT] card_id set to {selected_card_id}")
+    return build_app_state()
+
+@app.get("/api/inboxes")
+async def list_inboxes(username: str = Depends(get_current_user)):
+    """Список доступных входящих (инбоксов)"""
+    return [
+        InboxInfo(id=i["id"], name=i["name"], is_active=(i["id"] == selected_inbox_id))
+        for i in INBOXES_CONFIG
+    ]
+
+@app.post("/api/select-inbox", response_model=AppState)
+async def select_inbox_endpoint(request: SelectInboxRequest, username: str = Depends(get_current_user)):
+    """
+    Переключить активный инбокс.
+    При переключении сбрасываются deferred и выбранная карточка.
+    """
+    global selected_inbox_id, deferred, deferred_set, selected_card_id
+    if not any(i["id"] == request.inbox_id for i in INBOXES_CONFIG):
+        raise HTTPException(status_code=400, detail=f"Unknown inbox: {request.inbox_id}")
+    selected_inbox_id = request.inbox_id
+    deferred = []
+    deferred_set = set()
+    selected_card_id = None
+    print(f"[INBOX] Switched to inbox: {selected_inbox_id}")
+    return build_app_state()
 
 @app.post("/api/undo", response_model=AppState)
 async def undo_last_action(username: str = Depends(get_current_user)):
@@ -916,7 +1077,7 @@ if __name__ == "__main__":
 # ================================
 # Frontend (React build) serving
 # ================================
-FRONTEND_BUILD_DIR = Path("/home/vs/kaiten-inbox-app/frontend/build")
+FRONTEND_BUILD_DIR = Path(os.getenv("FRONTEND_BUILD_DIR", str(Path(__file__).parent.parent / "frontend" / "build")))
 
 if FRONTEND_BUILD_DIR.exists():
     static_dir = FRONTEND_BUILD_DIR / "static"

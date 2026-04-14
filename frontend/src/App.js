@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import Stack from './components/Stack';
 import FileTabs from './components/FileTabs';
 import AssigneeButtons from './components/AssigneeButtons';
 import Login from './components/Login';
-import { getState, assignCard, skipCard, undoLastAction, verifyToken, logout } from './services/api';
+import QueueDropdown from './components/QueueDropdown';
+import InboxList from './components/InboxList';
+import { getState, assignCard, skipCard, undoLastAction, selectCard, verifyToken, logout, getInboxes, selectInbox } from './services/api';
 import './App.css';
 
 // Импортируем список исполнителей
@@ -21,6 +22,12 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   
+  // ID карточки, выбранной вручную из выпадающего списка
+  const [selectedCardId, setSelectedCardId] = useState(null);
+
+  // Список входящих
+  const [inboxes, setInboxes] = useState([]);
+
   // Режимы работы
   const [multiMode, setMultiMode] = useState(false);
   const [selectedEmployees, setSelectedEmployees] = useState([]);
@@ -56,14 +63,17 @@ function App() {
   // Загрузка состояния при старте (только если авторизован)
   useEffect(() => {
     if (!isAuthenticated) return;
-    
+
+    // Загружаем список входящих
+    getInboxes().then(setInboxes).catch(console.error);
+
     loadState();
-    
-    // Автообновление каждые 5 секунд
+
+    // Автообновление каждые 15 секунд
     const interval = setInterval(() => {
       loadState();
-    }, 5000);
-    
+    }, 15000);
+
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
@@ -101,6 +111,39 @@ function App() {
     }
   };
 
+  // Переключить активный инбокс
+  const handleSelectInbox = async (inboxId) => {
+    try {
+      setLoading(true);
+      const newState = await selectInbox(inboxId);
+      setState(newState);
+      // Обновляем is_active в списке инбоксов
+      setInboxes(prev => prev.map(i => ({ ...i, is_active: i.id === inboxId })));
+      setError(null);
+    } catch (err) {
+      console.error('Failed to select inbox:', err);
+      setError('Не удалось переключить входящие');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Выбрать письмо из выпадающего списка очереди
+  const handleSelectFromQueue = async (cardId) => {
+    try {
+      setLoading(true);
+      const newState = await selectCard(cardId);
+      setState(newState);
+      setSelectedCardId(cardId);
+      setError(null);
+    } catch (err) {
+      console.error('Failed to select card:', err);
+      setError('Не удалось выбрать письмо');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Назначить исполнителя
   const handleAssign = async (userIds) => {
     if (!state?.current_card) return;
@@ -129,6 +172,7 @@ function App() {
       setSelectedEmployees([]);
       setCommentText(''); // Очищаем комментарий после назначения
       setShowCommentModal(false);
+      setSelectedCardId(null);
       setError(null);
       
       console.log('[DEBUG] Assignment successful! Comment was:', commentText ? `"${commentText}"` : 'empty');
@@ -143,11 +187,12 @@ function App() {
   // Пропустить письмо
   const handleSkip = async () => {
     if (!state?.current_card) return;
-    
+
     try {
       setLoading(true);
       const newState = await skipCard(state.current_card.card_id);
       setState(newState);
+      setSelectedCardId(null);
       setError(null);
     } catch (err) {
       console.error('Failed to skip:', err);
@@ -227,7 +272,14 @@ function App() {
     <div className="app">
       {/* Заголовок с кнопкой выхода */}
       <header className="app-header">
-        <h1>Распределение входящих писем</h1>
+        <div className="header-left">
+          <h1>Распределение входящих писем</h1>
+          <QueueDropdown
+            items={state?.queue_items || []}
+            currentCardId={state?.current_card?.card_id}
+            onSelect={handleSelectFromQueue}
+          />
+        </div>
         <div className="header-info">
           <div className="user-info">
             <span className="user-icon">👤</span>
@@ -242,19 +294,15 @@ function App() {
 
       {/* Основной контент */}
       <div className="app-content">
-        {/* Левая панель - стопки */}
-        <aside className="stacks-panel">
-          <Stack 
-            title="Очередь" 
-            count={state?.queue_count || 0} 
-            position="left"
-          />
-          <Stack 
-            title="Назначить исполнителя" 
-            count={state?.assigned_session_count || 0} 
-            position="left"
-          />
-        </aside>
+        {/* Левая панель - список входящих (только если > 1) */}
+        {inboxes.length > 1 && (
+          <aside className="stacks-panel">
+            <InboxList
+              inboxes={inboxes}
+              onSelect={handleSelectInbox}
+            />
+          </aside>
+        )}
 
         {/* Центральная панель - просмотр письма */}
         <main className="main-panel">
